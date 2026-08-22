@@ -27,7 +27,7 @@ import aiohttp
 from aiohttp import web
 import aiofiles
 import asyncio
-from urllib.parse import urlencode, urlsplit, urlparse, quote as urlquote, unquote as urlunquote
+from urllib.parse import urlencode, urlsplit, urlparse, quote as urlquote, unquote as urlunquote, parse_qs
 from services.tmdb import TMDBService
 from services.unit3d import Unit3DService
 from services.alldebrid import AllDebridService
@@ -831,10 +831,25 @@ async def handle_resolve(request):
     season = request.query.get('season')
     episode = request.query.get('episode')
     media_type = request.query.get('type')
+
+    # Certains lecteurs (Infuse via Stremio Apple TV) percent-encodent '=' et '&'
+    # dans la query string ("?season%3D6%26episode%3D2") : aiohttp ne voit alors
+    # aucun paramètre et la sélection d'épisode dans les packs saison échoue.
+    if season is None and episode is None and media_type is None and request.query_string:
+        fallback = parse_qs(urlunquote(request.query_string))
+        season = (fallback.get('season') or [None])[0]
+        episode = (fallback.get('episode') or [None])[0]
+        media_type = (fallback.get('type') or [None])[0]
+        if season or episode or media_type:
+            logging.info(f"Recovered mangled query params: season={season}, episode={episode}, type={media_type}")
     
     # === MODE qBittorrent ===
     if service_name == 'qbit':
         download_link = request.query.get('link')
+        if not download_link and request.query_string:
+            # Même récupération pour les query strings mutilées par le lecteur
+            fallback = parse_qs(urlunquote(request.query_string))
+            download_link = (fallback.get('link') or [None])[0]
         if not download_link:
             return web.Response(status=400, text="Missing download link")
         
